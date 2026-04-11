@@ -1,0 +1,83 @@
+# .azure-pipelines/deploy-api-gateway.yml
+# ─────────────────────────────────────────────
+# CI/CD pipeline for api-gateway.
+#
+# Triggers on push to main when files inside api-gateway/ change.
+# Runs on the self-hosted agent installed on OCI VM 2.
+#
+# Steps:
+#   1. Login to GitHub Container Registry (GHCR)
+#   2. Build Docker image (multi-arch: amd64 + arm64)
+#   3. Push image to GHCR with build ID as tag
+#   4. Update K8s deployment image tag (rolling update)
+#   5. Wait for rollout to complete (or fail + alert)
+# ─────────────────────────────────────────────
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      # Only trigger when api-gateway files change
+      - api-gateway/**
+
+# Run on our self-hosted agent on OCI VM 2
+# This agent has kubectl + docker + access to K3s cluster
+pool:
+  name: Default
+
+variables:
+  IMAGE_REPO: ghcr.io/$(GITHUB_USERNAME)/api-gateway
+  IMAGE_TAG:  $(Build.BuildId)
+
+steps:
+
+  # ── Step 1: Login to GHCR ───────────────────────────────────────────────
+  - script: |
+      echo $(GITHUB_TOKEN) | docker login ghcr.io \
+        -u $(GITHUB_USERNAME) \
+        --password-stdin
+    displayName: Login to GitHub Container Registry
+    env:
+      GITHUB_TOKEN: $(GITHUB_TOKEN)
+
+  # ── Step 2 + 3: Build multi-arch image and push ─────────────────────────
+  # Builds for both amd64 (OCI AMD VMs) and arm64 (OCI ARM A1 if available)
+  # Docker buildx handles cross-compilation automatically
+  - script: |
+      docker buildx create --use --name multiarch-builder 2>/dev/null || true
+      docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        -t $(IMAGE_REPO):$(IMAGE_TAG) \
+        -t $(IMAGE_REPO):latest \
+        --push \
+        ./api-gateway
+    displayName: Build and push multi-arch Docker image
+
+  # ── Step 4: Rolling update in K3s ───────────────────────────────────────
+  # kubectl set image updates the pod spec with the new image tag.
+  # K3s performs a rolling update: starts new pod, waits for Ready,
+  # then terminates old pod. Zero downtime.
+  - script: |
+      kubectl set image deployment/api-gateway \
+        api=$(IMAGE_REPO):$(IMAGE_TAG) \
+        --record
+    displayName: Update deployment image tag
+
+  # ── Step 5: Wait for rollout ─────────────────────────────────────────────
+  # Waits up to 2 minutes for the new pod to become Ready.
+  # If the pod fails (bad image, crash loop), this step fails and
+  # Azure Pipelines marks the build as failed — you get notified.
+  - script: |
+      kubectl rollout status deployment/api-gateway \
+        --timeout=120s
+    displayName: Wait for rollout to complete
+
+  # ── Step 6: Verify health endpoint ──────────────────────────────────────
+  - script: |
+      sleep 5
+      curl -sf https://api.$(DOMAIN)/health | grep '"status":"ok"'
+    displayName: Smoke test health endpoint
+    env:
+      DOMAIN: $(DOMAIN)

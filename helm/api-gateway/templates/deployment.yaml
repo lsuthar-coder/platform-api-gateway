@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+      annotations:
+        # Grafana Agent scrapes /metrics from pods with this annotation
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Pin pod to specific node
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 3000
+
+          # All secrets injected as environment variables
+          # kubectl create secret generic api-gateway-secrets \
+          #   --from-literal=DATABASE_URL="..." \
+          #   --from-literal=REDIS_URL="redis://redis-master:6379" \
+          #   --from-literal=AUTH_SERVICE_URL="http://auth-service:5000" \
+          #   --from-literal=FLAG_SERVICE_URL="http://feature-flag-service:4000" \
+          #   --from-literal=SNS_TOPIC_ARN="arn:aws:sns:..." \
+          #   --from-literal=AWS_ACCESS_KEY_ID="..." \
+          #   --from-literal=AWS_SECRET_ACCESS_KEY="..." \
+          #   --from-literal=OTLP_ENDPOINT="https://tempo-prod-xx.grafana.net/tempo" \
+          #   --from-literal=OTLP_USERNAME="..." \
+          #   --from-literal=OTLP_PASSWORD="..."
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+
+          env:
+            - name: SERVICE_NAME
+              value: api-gateway
+            - name: PORT
+              value: "3000"
+
+          # Readiness probe — K8s won't send traffic until this returns 200
+          # Checks routes are loaded + JWT key is cached
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 3
+
+          # Liveness probe — K8s restarts the pod if this fails 3 times
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

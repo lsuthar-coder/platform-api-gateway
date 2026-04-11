@@ -1,0 +1,51 @@
+# helm/api-gateway/values.yaml
+# ─────────────────────────────────────────────
+# Default Helm values for the API Gateway.
+# Override specific values during deploy:
+#   helm upgrade api-gateway ./helm/api-gateway --set image.tag=v2
+# ─────────────────────────────────────────────
+
+image:
+  repository: ghcr.io/YOUR_GITHUB_USERNAME/api-gateway
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 3000
+
+# Pin the Gateway pod to VM 2 (k3s-agent)
+# VM 1 runs the control plane + Flag API + Auth Service.
+# VM 2 is dedicated to the Gateway — higher traffic, needs own node.
+nodeSelector:
+  kubernetes.io/hostname: k3s-agent
+
+# If using ARM A1 node instead, change to:
+# nodeSelector:
+#   kubernetes.io/hostname: k3s-arm
+
+replicaCount: 1  # increase to 2 once ARM A1 is available
+
+# Resource limits — sized for 1 GB RAM nodes.
+# With ARM A1 (24 GB), increase limits significantly.
+resources:
+  requests:
+    cpu:    150m
+    memory: 200Mi
+  limits:
+    cpu:    600m
+    memory: 400Mi
+
+# Secret containing DATABASE_URL, REDIS_URL, etc.
+# Created manually via kubectl create secret before first deploy.
+secretName: api-gateway-secrets
+
+# Ingress via Traefik (built into K3s)
+ingress:
+  enabled: true
+  host: api.yourdomain.com
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    secretName: api-gateway-tls
