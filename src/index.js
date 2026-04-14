@@ -135,7 +135,11 @@ async function resolveUpstream(req, res, next) {
 // http-proxy-middleware is called per-request so the target can change each time.
 function dynamicProxy(req, res, next) {
   const target = req.upstreamUrl;
-
+  const prefix = req.route.path_prefix;
+  // Strip prefix from path before proxying
+ req.url = req.originalUrl.startsWith(prefix) 
+  ? req.originalUrl.slice(prefix.length) || '/' 
+  : req.originalUrl;
   const proxy = createProxyMiddleware({
     target,
     changeOrigin: true,

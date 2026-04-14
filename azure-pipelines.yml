@@ -1,0 +1,32 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  name: Default
+
+variables:
+  IMAGE_NAME: ghcr.io/lsuthar-coder/api-gateway
+  IMAGE_TAG: $(Build.BuildId)
+
+steps:
+  - script: |
+      echo $(GITHUB_TOKEN) | docker login ghcr.io -u lsuthar-coder --password-stdin
+    displayName: Login to GHCR
+
+  - script: |
+      docker buildx build \
+        --platform linux/amd64 \
+        -t $(IMAGE_NAME):$(IMAGE_TAG) \
+        -t $(IMAGE_NAME):latest \
+        --push \
+        .
+    displayName: Build and push image
+
+  - script: |
+      echo $(KUBECONFIG_CONTENT) | base64 -d > /tmp/kubeconfig
+      export KUBECONFIG=/tmp/kubeconfig
+      kubectl set image deployment/api-gateway api=$(IMAGE_NAME):$(IMAGE_TAG) -n default
+      kubectl rollout status deployment/api-gateway -n default
+    displayName: Deploy to Civo K8s
